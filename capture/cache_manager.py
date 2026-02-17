@@ -55,6 +55,8 @@ class GlobalCacheManager:
         
         # 清理定时器
         self._cleanup_timer: Optional[threading.Timer] = None
+        # 关闭标记：用于阻止清理任务在退出后再次调度新定时器
+        self._shutdown = False
         self._start_cleanup_timer()
         
         # 统计信息
@@ -194,10 +196,12 @@ class GlobalCacheManager:
     def cleanup_all(self) -> None:
         """清理所有资源（退出时调用）"""
         try:
-            # 停止清理定时器
-            if self._cleanup_timer:
-                self._cleanup_timer.cancel()
-                self._cleanup_timer = None
+            # 先标记关闭，再停止当前定时器，避免并发中的cleanup_task在finally里重启新定时器
+            with self._lock:
+                self._shutdown = True
+                if self._cleanup_timer:
+                    self._cleanup_timer.cancel()
+                    self._cleanup_timer = None
             
             # 清理所有会话
             self.force_cleanup_all()
@@ -208,18 +212,25 @@ class GlobalCacheManager:
     
     def _start_cleanup_timer(self) -> None:
         """启动清理定时器"""
+        with self._lock:
+            if self._shutdown:
+                return
+
         def cleanup_task():
             try:
                 self.cleanup_expired_sessions()
             except Exception as e:
                 self._logger.error(f"定时清理任务失败: {e}")
             finally:
-                # 重新启动定时器
+                # 仅在未关闭状态下重新启动，避免退出期间定时器复活。
                 self._start_cleanup_timer()
         
-        self._cleanup_timer = threading.Timer(self._cleanup_interval, cleanup_task)
-        self._cleanup_timer.daemon = True
-        self._cleanup_timer.start()
+        with self._lock:
+            if self._shutdown:
+                return
+            self._cleanup_timer = threading.Timer(self._cleanup_interval, cleanup_task)
+            self._cleanup_timer.daemon = True
+            self._cleanup_timer.start()
     
     def configure(self, session_timeout: float = None, cleanup_interval: float = None) -> None:
         """配置管理器参数"""

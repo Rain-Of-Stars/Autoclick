@@ -37,6 +37,7 @@ class PerformanceCollector(QtCore.QObject):
         self.target_process_name = target_process_name
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
         self._logger = get_logger()
         self._metrics_history: List[PerformanceMetrics] = []
         self._max_history = 60  # 保留1分钟数据，减少内存占用
@@ -50,6 +51,7 @@ class PerformanceCollector(QtCore.QObject):
         if self._running:
             return
         
+        self._stop_event.clear()
         self._running = True
         self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._thread.start()
@@ -58,13 +60,14 @@ class PerformanceCollector(QtCore.QObject):
     def stop_monitoring(self):
         """停止性能监控"""
         self._running = False
+        self._stop_event.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
         self._logger.info("性能监控已停止")
     
     def _monitor_loop(self):
         """监控主循环"""
-        while self._running:
+        while self._running and not self._stop_event.is_set():
             try:
                 metrics = self._collect_metrics()
                 if metrics:
@@ -76,10 +79,13 @@ class PerformanceCollector(QtCore.QObject):
                     # 发送更新信号
                     self.metrics_updated.emit(metrics)
                 
-                time.sleep(5.0)  # 每5秒收集一次，减少监控开销
+                # 使用可中断等待，确保stop_monitoring后能及时退出线程。
+                if self._stop_event.wait(timeout=5.0):
+                    break
             except Exception as e:
                 self._logger.error(f"性能监控异常: {e}")
-                time.sleep(5.0)  # 出错后等待5秒再重试
+                if self._stop_event.wait(timeout=5.0):
+                    break
     
     def _collect_metrics(self) -> Optional[PerformanceMetrics]:
         """收集性能指标 - 优化版本，减少进程遍历开销"""
