@@ -136,19 +136,23 @@ class AutoHWNDUpdater(QtCore.QObject):
             
     def stop(self):
         """停止自动更新"""
+        smart_finder = None
+        update_timer = None
+
         with self._lock:
             self._running = False
-            
-            # 停止智能查找器
-            if self._smart_finder:
-                self._smart_finder.stop_smart_search()
-                
-            # 停止传统定时器
-            if self._update_timer:
-                self._update_timer.cancel()
-                self._update_timer = None
-                
-            self.logger.info("自动窗口句柄更新器已停止")
+            smart_finder = self._smart_finder
+            update_timer = self._update_timer
+            self._update_timer = None
+
+        # 锁外执行潜在阻塞操作，降低退出链路卡顿与死锁风险
+        if smart_finder:
+            smart_finder.stop_smart_search()
+
+        if update_timer:
+            update_timer.cancel()
+
+        self.logger.info("自动窗口句柄更新器已停止")
             
     def _restart_if_needed(self):
         """根据配置重启更新器"""

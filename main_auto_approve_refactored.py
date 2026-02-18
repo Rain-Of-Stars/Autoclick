@@ -13,6 +13,7 @@ import signal
 import warnings
 import ctypes
 import time
+import threading
 from typing import TYPE_CHECKING, Optional, Callable
 
 # 在导入Qt库之前关闭 qt.qpa.window 分类日志
@@ -170,6 +171,12 @@ class RefactoredTrayApp(QtWidgets.QSystemTrayIcon):
         self._progress_timer = QtCore.QTimer(self)
         self._progress_timer.timeout.connect(self._update_start_progress)
         self._progress_counter = 0
+
+        # 退出状态：主线程快速返回，阻塞清理放到后台线程
+        self._quit_in_progress = False
+        self._quit_cleanup_done = False
+        self._quit_watchdog_ms = 12000
+        self._quit_cleanup_thread: Optional[threading.Thread] = None
         
         # 自动窗口句柄更新器
         self.auto_hwnd_updater = AutoHWNDUpdater()
@@ -945,30 +952,106 @@ class RefactoredTrayApp(QtWidgets.QSystemTrayIcon):
                 self.logger.error(f"显示屏幕列表失败: {e}")
 
     def quit(self):
-        """退出应用 - 在主线程执行"""
+        """退出应用 - 主线程快速返回，阻塞清理放到后台线程"""
         with PerformanceTimer("应用退出"):
+            if self._quit_in_progress:
+                self.logger.info("退出流程已在进行中，忽略重复请求")
+                return
+
+            self._quit_in_progress = True
+            self._quit_cleanup_done = False
             try:
-                # 停止自动窗口句柄更新器
-                if self.auto_hwnd_updater.is_running():
-                    self.auto_hwnd_updater.stop()
-                
-                # 停止扫描
-                if self.worker and self.worker.isRunning():
-                    self.stop_scanning()
-
-                # 清理多线程资源
-                self._cleanup_threading_resources()
-
-                # 隐藏托盘图标
+                # 先隐藏托盘，确保用户点击退出后立即有反馈
                 self.setVisible(False)
+                self.setToolTip("Autoclick - 正在退出...")
 
-                # 退出应用
-                self.app.quit()
+                # 在主线程仅发送停止命令，不等待，避免卡顿
+                worker_to_cleanup = self.worker
+                self.worker = None
+                if worker_to_cleanup and worker_to_cleanup.isRunning():
+                    try:
+                        worker_to_cleanup.stop()
+                    except Exception as stop_error:
+                        self.logger.warning(f"退出阶段发送扫描停止命令失败: {stop_error}")
+
+                # 后台执行所有阻塞清理（wait/join/IO）
+                self._quit_cleanup_thread = threading.Thread(
+                    target=self._run_quit_cleanup_pipeline,
+                    args=(worker_to_cleanup,),
+                    name="tray-quit-cleanup",
+                    daemon=True,
+                )
+                self._quit_cleanup_thread.start()
+
+                # 兜底：清理线程卡住时也能退出事件循环
+                QtCore.QTimer.singleShot(self._quit_watchdog_ms, self._on_quit_watchdog_timeout)
 
             except Exception as e:
                 self.logger.error(f"退出应用失败: {e}")
-                # 强制退出
-                sys.exit(1)
+                self._request_app_quit()
+
+    def _run_quit_cleanup_pipeline(self, worker_to_cleanup):
+        """后台执行退出清理，避免阻塞主线程。"""
+        try:
+            # 停止自动窗口句柄更新器（可能等待事件线程退出）
+            if self.auto_hwnd_updater.is_running():
+                self.auto_hwnd_updater.stop()
+
+            # 等待扫描工作器退出并清理资源（可能包含阻塞wait）
+            self._wait_worker_exit_for_quit(worker_to_cleanup)
+
+            # 统一执行剩余线程/进程/异步资源回收
+            self._cleanup_threading_resources()
+        except Exception as e:
+            self.logger.error(f"后台退出清理失败: {e}")
+        finally:
+            self._quit_cleanup_done = True
+            self._request_app_quit()
+
+    def _wait_worker_exit_for_quit(self, worker_to_cleanup):
+        """退出阶段在后台等待扫描工作器退出。"""
+        if not worker_to_cleanup:
+            return
+
+        try:
+            if worker_to_cleanup.isRunning():
+                worker_to_cleanup.wait(5000)
+
+            if worker_to_cleanup.isRunning():
+                self.logger.warning("扫描进程未在超时内停止，执行强制终止")
+                worker_to_cleanup.terminate()
+                worker_to_cleanup.wait(2000)
+
+            worker_to_cleanup.cleanup()
+        except Exception as e:
+            self.logger.error(f"后台等待扫描工作器退出失败: {e}")
+
+    def _request_app_quit(self):
+        """将app.quit投递回Qt主线程执行。"""
+        try:
+            invoked = QtCore.QMetaObject.invokeMethod(
+                self.app,
+                "quit",
+                QtCore.Qt.ConnectionType.QueuedConnection,
+            )
+            if not invoked:
+                self.app.quit()
+        except Exception as e:
+            self.logger.warning(f"投递app.quit失败，降级直接退出: {e}")
+            try:
+                self.app.quit()
+            except Exception:
+                pass
+
+    def _on_quit_watchdog_timeout(self):
+        """退出兜底：清理超时时强制退出主循环。"""
+        if self._quit_cleanup_done or not self._quit_in_progress:
+            return
+
+        cleanup_thread = self._quit_cleanup_thread
+        if cleanup_thread and cleanup_thread.is_alive():
+            self.logger.warning("退出清理超时，触发兜底退出")
+            self._request_app_quit()
 
     def _cleanup_threading_resources(self):
         """清理多线程资源"""

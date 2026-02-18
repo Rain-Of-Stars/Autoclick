@@ -9,6 +9,8 @@
 """
 
 import os
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -19,6 +21,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6 import QtCore, QtGui, QtWidgets
 
 import main_auto_approve_refactored as tray_module
+from auto_approve.auto_hwnd_updater import AutoHWNDUpdater
 from auto_approve.gui_responsiveness_manager import UIUpdateRequest
 
 
@@ -64,6 +67,10 @@ class _TrayHarness(tray_module.RefactoredTrayApp):
         self._start_timeout_timer = QtCore.QTimer(self)
         self._start_timeout_timer.setSingleShot(True)
         self._progress_timer = QtCore.QTimer(self)
+        self._quit_in_progress = False
+        self._quit_cleanup_done = False
+        self._quit_watchdog_ms = 300
+        self._quit_cleanup_thread = None
 
 
 @pytest.fixture(scope="module")
@@ -223,3 +230,95 @@ def test_cleanup_threading_resources_uses_blocking_scanner_cleanup(tray_app, mon
     args, kwargs = calls["scanner"][0]
     assert args == ()
     assert kwargs == {"blocking": True, "timeout_s": 8.0}
+
+
+def test_quit_returns_quickly_and_runs_cleanup_in_background_thread(tray_app, monkeypatch):
+    cleanup_started = threading.Event()
+    cleanup_release = threading.Event()
+    cleanup_done = threading.Event()
+    cleanup_thread_ids = []
+
+    def _fake_cleanup():
+        cleanup_thread_ids.append(threading.get_ident())
+        cleanup_started.set()
+        cleanup_release.wait(timeout=0.6)
+        cleanup_done.set()
+
+    tray_app.auto_hwnd_updater = SimpleNamespace(is_running=lambda: False)
+    tray_app.worker = None
+    monkeypatch.setattr(tray_app, "_request_app_quit", lambda: None)
+    monkeypatch.setattr(tray_app, "_cleanup_threading_resources", _fake_cleanup)
+
+    main_thread_id = threading.get_ident()
+    start = time.perf_counter()
+    tray_app.quit()
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 0.2
+    assert cleanup_started.wait(timeout=0.3)
+    assert cleanup_thread_ids and cleanup_thread_ids[0] != main_thread_id
+
+    cleanup_release.set()
+    assert cleanup_done.wait(timeout=0.3)
+
+
+def test_quit_still_calls_scanner_cleanup_with_expected_parameters(tray_app, monkeypatch):
+    scanner_cleanup_called = threading.Event()
+    scanner_calls = []
+
+    class _FakeScannerManager:
+        def cleanup(self, *args, **kwargs):
+            scanner_calls.append((args, kwargs, threading.get_ident()))
+            scanner_cleanup_called.set()
+
+    tray_app.auto_hwnd_updater = SimpleNamespace(is_running=lambda: False)
+    tray_app.worker = None
+    monkeypatch.setattr(tray_app, "_request_app_quit", lambda: None)
+
+    monkeypatch.setattr(
+        "workers.scanner_process.get_global_scanner_manager",
+        lambda: _FakeScannerManager(),
+    )
+    monkeypatch.setattr("workers.io_tasks.cleanup_thread_pool", lambda: None)
+
+    main_thread_id = threading.get_ident()
+    start = time.perf_counter()
+    tray_app.quit()
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 0.2
+    assert scanner_cleanup_called.wait(timeout=0.6)
+
+    args, kwargs, cleanup_thread_id = scanner_calls[0]
+    assert args == ()
+    assert kwargs == {"blocking": True, "timeout_s": 8.0}
+    assert cleanup_thread_id != main_thread_id
+
+
+def test_auto_hwnd_updater_stop_calls_smart_finder_outside_lock():
+    updater = AutoHWNDUpdater()
+    updater._lock = threading.Lock()
+
+    state = {"lock_free": None, "timer_cancelled": False}
+
+    class _FakeSmartFinder:
+        def stop_smart_search(self):
+            # 若这里能拿到锁，说明stop_smart_search在锁外执行
+            acquired = updater._lock.acquire(blocking=False)
+            state["lock_free"] = acquired
+            if acquired:
+                updater._lock.release()
+
+    class _FakeTimer:
+        def cancel(self):
+            state["timer_cancelled"] = True
+
+    updater._smart_finder = _FakeSmartFinder()
+    updater._update_timer = _FakeTimer()
+    updater._running = True
+
+    updater.stop()
+
+    assert state["lock_free"] is True
+    assert state["timer_cancelled"] is True
+    assert updater.is_running() is False
