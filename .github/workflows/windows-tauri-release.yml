@@ -2,6 +2,12 @@ name: Windows Tauri Release
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish the current package version to the matching GitHub release tag
+        required: false
+        default: false
+        type: boolean
   pull_request:
     branches:
       - main
@@ -81,6 +87,8 @@ jobs:
       - name: Resolve release metadata
         id: release_meta
         shell: bash
+        env:
+          MANUAL_RELEASE_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release || 'false' }}
         run: |
           node <<'NODE'
           const fs = require("node:fs");
@@ -106,18 +114,20 @@ jobs:
             process.exit(1);
           }
 
+          const expectedTag = `v${packageVersion}`;
           const ref = process.env.GITHUB_REF ?? "";
-          const refName = process.env.GITHUB_REF_NAME ?? `v${packageVersion}`;
-          const releaseRequested = ref.startsWith("refs/tags/v");
+          const refName = process.env.GITHUB_REF_NAME ?? expectedTag;
+          const manualReleaseRequested = (process.env.MANUAL_RELEASE_REQUESTED ?? "false") === "true";
+          const releaseRequested = ref.startsWith("refs/tags/v") || manualReleaseRequested;
 
-          if (releaseRequested && refName !== `v${packageVersion}`) {
-            console.error(`标签 ${refName} 与版本 v${packageVersion} 不一致。`);
+          if (ref.startsWith("refs/tags/v") && refName !== expectedTag) {
+            console.error(`标签 ${refName} 与版本 ${expectedTag} 不一致。`);
             process.exit(1);
           }
 
           const output = [
             `release_requested=${releaseRequested ? "true" : "false"}`,
-            `release_tag=${releaseRequested ? refName : `v${packageVersion}`}`,
+            `release_tag=${expectedTag}`,
             `release_version=${packageVersion}`
           ].join("\n") + "\n";
 
@@ -195,7 +205,6 @@ jobs:
     name: Build Windows Bundles
     needs:
       - resolve-release-meta
-      - verify-windows
     runs-on: windows-latest
     timeout-minutes: 45
 
@@ -228,6 +237,12 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Clean stale bundle outputs
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force target/release/bundle -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force target/release/wix -ErrorAction SilentlyContinue
+
       - name: Build Windows bundles
         run: pnpm tauri:build
 
@@ -238,8 +253,8 @@ jobs:
           name: windows-tauri-bundles
           if-no-files-found: error
           path: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/msi/*.msi
+            target/release/bundle/nsis/*_${{ needs.resolve-release-meta.outputs.release_version }}_*.exe
+            target/release/bundle/msi/*_${{ needs.resolve-release-meta.outputs.release_version }}_*.msi
 
   publish-release:
     name: Publish GitHub Release
@@ -264,7 +279,14 @@ jobs:
         shell: bash
         run: |
           cd release-artifacts
-          sha256sum * > SHA256SUMS.txt
+          mapfile -d '' bundle_files < <(find . -type f \( -name '*.exe' -o -name '*.msi' \) -print0 | sort -z)
+
+          if [ "${#bundle_files[@]}" -eq 0 ]; then
+            echo "未找到 Windows 安装包产物。" >&2
+            exit 1
+          fi
+
+          sha256sum "${bundle_files[@]}" > SHA256SUMS.txt
 
       - name: Create GitHub release
         env:
@@ -274,9 +296,15 @@ jobs:
           tag="${{ needs.resolve-release-meta.outputs.release_tag }}"
           version="${{ needs.resolve-release-meta.outputs.release_version }}"
           repo="${{ github.repository }}"
+          mapfile -d '' release_files < <(find release-artifacts -type f \( -name '*.exe' -o -name '*.msi' -o -name 'SHA256SUMS.txt' \) -print0 | sort -z)
+
+          if [ "${#release_files[@]}" -eq 0 ]; then
+            echo "未找到可发布的文件。" >&2
+            exit 1
+          fi
 
           if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-            gh release upload "$tag" release-artifacts/* --repo "$repo" --clobber
+            gh release upload "$tag" "${release_files[@]}" --repo "$repo" --clobber
           else
-            gh release create "$tag" release-artifacts/* --repo "$repo" --verify-tag --title "Autoclick Tauri 2 v$version" --generate-notes
+            gh release create "$tag" "${release_files[@]}" --repo "$repo" --verify-tag --title "Autoclick Tauri 2 v$version" --generate-notes
           fi
