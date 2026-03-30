@@ -69,7 +69,10 @@ impl PathSanitizer {
             }
         }
 
-        Self { app_root, home_dirs }
+        Self {
+            app_root,
+            home_dirs,
+        }
     }
 
     fn sanitize(&self, path: &Path) -> String {
@@ -169,7 +172,10 @@ pub fn export_bundle<R: Serialize>(
     })
 }
 
-fn build_environment_info(paths: &AppPaths, sanitizer: &PathSanitizer) -> anyhow::Result<EnvironmentInfo> {
+fn build_environment_info(
+    paths: &AppPaths,
+    sanitizer: &PathSanitizer,
+) -> anyhow::Result<EnvironmentInfo> {
     let current_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     Ok(EnvironmentInfo {
         os: env::consts::OS.to_string(),
