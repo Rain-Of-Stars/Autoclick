@@ -1,0 +1,15 @@
+[package]
+name = "autoclick-runtime"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+autoclick-capture = { path = "../autoclick-capture" }
+autoclick-detect = { path = "../autoclick-detect" }
+autoclick-domain = { path = "../autoclick-domain" }
+autoclick-input = { path = "../autoclick-input" }
+autoclick-platform-win = { path = "../autoclick-platform-win" }
+image.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+thiserror.workspace = true

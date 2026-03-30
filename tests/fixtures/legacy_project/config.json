@@ -1,0 +1,9 @@
+{
+  "template_path": "",
+  "template_paths": [],
+  "threshold": 0.9,
+  "fps_max": 24,
+  "click_method": "message",
+  "window_title": "Demo Window",
+  "allow_partial_match": true
+}

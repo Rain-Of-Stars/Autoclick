@@ -1,0 +1,12 @@
+[package]
+name = "autoclick-input"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+autoclick-detect = { path = "../autoclick-detect" }
+autoclick-domain = { path = "../autoclick-domain" }
+autoclick-platform-win = { path = "../autoclick-platform-win" }
+serde.workspace = true
+thiserror.workspace = true
+windows.workspace = true

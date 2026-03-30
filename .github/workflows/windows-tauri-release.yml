@@ -1,0 +1,282 @@
+name: Windows Tauri Release
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/windows-tauri-release.yml
+      - Cargo.toml
+      - Cargo.lock
+      - package.json
+      - pnpm-lock.yaml
+      - index.html
+      - postcss.config.cjs
+      - tailwind.config.ts
+      - tsconfig.app.json
+      - tsconfig.json
+      - tsconfig.node.json
+      - vite.config.ts
+      - src/**
+      - src-tauri/**
+      - scripts/release_check.ps1
+      - tests/**
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+    paths:
+      - .github/workflows/windows-tauri-release.yml
+      - Cargo.toml
+      - Cargo.lock
+      - package.json
+      - pnpm-lock.yaml
+      - index.html
+      - postcss.config.cjs
+      - tailwind.config.ts
+      - tsconfig.app.json
+      - tsconfig.json
+      - tsconfig.node.json
+      - vite.config.ts
+      - src/**
+      - src-tauri/**
+      - scripts/release_check.ps1
+      - tests/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-tauri-release-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  resolve-release-meta:
+    name: Resolve Release Metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release_requested: ${{ steps.release_meta.outputs.release_requested }}
+      release_tag: ${{ steps.release_meta.outputs.release_tag }}
+      release_version: ${{ steps.release_meta.outputs.release_version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Resolve release metadata
+        id: release_meta
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+
+          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          const tauri = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
+          const cargoToml = fs.readFileSync("Cargo.toml", "utf8");
+          const cargoMatch = cargoToml.match(/\[workspace\.package\][\s\S]*?version\s*=\s*"([^"]+)"/);
+
+          if (!cargoMatch) {
+            console.error("未在 Cargo.toml 中找到 workspace.package.version。");
+            process.exit(1);
+          }
+
+          const packageVersion = pkg.version;
+          const cargoVersion = cargoMatch[1];
+          const tauriVersion = tauri.version;
+
+          if (packageVersion !== cargoVersion || packageVersion !== tauriVersion) {
+            console.error(
+              `版本不一致: package.json=${packageVersion}, Cargo.toml=${cargoVersion}, tauri.conf.json=${tauriVersion}`
+            );
+            process.exit(1);
+          }
+
+          const ref = process.env.GITHUB_REF ?? "";
+          const refName = process.env.GITHUB_REF_NAME ?? `v${packageVersion}`;
+          const releaseRequested = ref.startsWith("refs/tags/v");
+
+          if (releaseRequested && refName !== `v${packageVersion}`) {
+            console.error(`标签 ${refName} 与版本 v${packageVersion} 不一致。`);
+            process.exit(1);
+          }
+
+          const output = [
+            `release_requested=${releaseRequested ? "true" : "false"}`,
+            `release_tag=${releaseRequested ? refName : `v${packageVersion}`}`,
+            `release_version=${packageVersion}`
+          ].join("\n") + "\n";
+
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, output);
+          NODE
+
+  verify-windows:
+    name: Verify Windows Build
+    needs: resolve-release-meta
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build output
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: windows-tauri-release
+          workspaces: |
+            . -> target
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Rust format check
+        run: cargo fmt --all --check
+
+      - name: Rust lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --workspace
+
+      - name: Windows integration tests
+        run: cargo test -p autoclick-tauri2 --test windows_integration -- --nocapture
+
+      - name: Diagnostics export tests
+        run: cargo test -p autoclick-diagnostics export_bundle
+
+      - name: Performance budget tests
+        run: cargo test -p autoclick-diagnostics perf_budget
+
+      - name: Legacy import validation
+        run: cargo test -p autoclick-storage import_legacy -- --nocapture
+
+      - name: Frontend tests
+        run: pnpm test
+
+      - name: TypeScript checks
+        run: pnpm typecheck
+
+      - name: Frontend build
+        run: pnpm build
+
+  build-windows:
+    name: Build Windows Bundles
+    needs:
+      - resolve-release-meta
+      - verify-windows
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build output
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: windows-tauri-release
+          workspaces: |
+            . -> target
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Windows bundles
+        run: pnpm tauri:build
+
+      - name: Upload Windows bundle artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          compression-level: 0
+          name: windows-tauri-bundles
+          if-no-files-found: error
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+
+  publish-release:
+    name: Publish GitHub Release
+    needs:
+      - resolve-release-meta
+      - verify-windows
+      - build-windows
+    if: needs.resolve-release-meta.outputs.release_requested == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Windows bundle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-tauri-bundles
+          path: release-artifacts
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd release-artifacts
+          sha256sum * > SHA256SUMS.txt
+
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="${{ needs.resolve-release-meta.outputs.release_tag }}"
+          version="${{ needs.resolve-release-meta.outputs.release_version }}"
+          repo="${{ github.repository }}"
+
+          if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+            gh release upload "$tag" release-artifacts/* --repo "$repo" --clobber
+          else
+            gh release create "$tag" release-artifacts/* --repo "$repo" --verify-tag --title "Autoclick Tauri 2 v$version" --generate-notes
+          fi

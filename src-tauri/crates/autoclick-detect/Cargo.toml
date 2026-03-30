@@ -1,0 +1,24 @@
+[package]
+name = "autoclick-detect"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+autoclick-capture = { path = "../autoclick-capture" }
+autoclick-domain = { path = "../autoclick-domain" }
+autoclick-storage = { path = "../autoclick-storage" }
+fast_image_resize.workspace = true
+image.workspace = true
+imageproc.workspace = true
+parking_lot.workspace = true
+rayon.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+criterion = { version = "0.5.1", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "detect_bench"
+harness = false

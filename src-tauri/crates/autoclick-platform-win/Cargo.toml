@@ -1,0 +1,10 @@
+[package]
+name = "autoclick-platform-win"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+autoclick-domain = { path = "../autoclick-domain" }
+serde.workspace = true
+thiserror.workspace = true
+windows.workspace = true

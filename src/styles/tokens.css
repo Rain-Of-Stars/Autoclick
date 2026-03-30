@@ -1,0 +1,12 @@
+:root {
+  color-scheme: dark;
+  --color-surface: 11 16 24;
+  --color-panel: 19 26 37;
+  --color-accent: 70 128 186;
+  --color-ink: 226 232 240;
+  --color-muted: 134 147 165;
+  --color-success: 87 166 116;
+  --color-danger: 196 92 92;
+  --color-warning: 201 151 66;
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}

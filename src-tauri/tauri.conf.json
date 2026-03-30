@@ -1,0 +1,88 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Autoclick Tauri 2",
+  "version": "6.0.0",
+  "identifier": "com.codex.autoclick.tauri2",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm exec vite build",
+    "frontendDist": "../dist",
+    "devUrl": "http://127.0.0.1:1420",
+    "removeUnusedCommands": true
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Autoclick Tauri 2",
+        "width": 1440,
+        "height": 920,
+        "minWidth": 1200,
+        "minHeight": 760,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": false,
+        "shadow": true,
+        "theme": "Dark",
+        "visible": true
+      }
+    ],
+    "trayIcon": {
+      "iconPath": "icons/icon.ico",
+      "iconAsTemplate": false,
+      "menuOnLeftClick": false
+    },
+    "security": {
+      "capabilities": ["main-window"],
+      "csp": {
+        "default-src": "'self'",
+        "base-uri": "'self'",
+        "form-action": "'self'",
+        "frame-ancestors": "'none'",
+        "connect-src": "ipc: http://ipc.localhost",
+        "img-src": "'self' asset: http://asset.localhost blob: data:",
+        "font-src": "'self' data:",
+        "style-src": "'self' 'unsafe-inline'",
+        "object-src": "'none'"
+      },
+      "devCsp": {
+        "default-src": "'self' http://127.0.0.1:1420",
+        "base-uri": "'self'",
+        "form-action": "'self'",
+        "frame-ancestors": "'none'",
+        "connect-src": "ipc: http://ipc.localhost http://127.0.0.1:1420 ws://127.0.0.1:1420",
+        "img-src": "'self' asset: http://asset.localhost blob: data: http://127.0.0.1:1420",
+        "font-src": "'self' data: http://127.0.0.1:1420",
+        "style-src": "'self' 'unsafe-inline' http://127.0.0.1:1420",
+        "script-src": "'self' 'unsafe-eval' http://127.0.0.1:1420",
+        "object-src": "'none'"
+      },
+      "headers": {
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Resource-Policy": "same-origin",
+        "Permissions-Policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+        "X-Content-Type-Options": "nosniff"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "createUpdaterArtifacts": false,
+    "icon": ["icons/icon.ico", "icons/icon.png"],
+    "category": "Utility",
+    "shortDescription": "Autoclick 全 Rust + Tauri 2 控制台客户端",
+    "longDescription": "Autoclick Tauri 2 使用 Rust 原生捕获、检测、点击和诊断能力，提供单一正式运行路径的企业控制台桌面客户端。",
+    "publisher": "Autoclick Team"
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [],
+      "pubkey": "",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

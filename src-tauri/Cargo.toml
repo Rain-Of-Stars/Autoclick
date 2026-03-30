@@ -1,0 +1,31 @@
+[package]
+name = "autoclick-tauri2"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[lib]
+name = "autoclick_tauri2_lib"
+crate-type = ["cdylib", "rlib", "staticlib"]
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+image.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri.workspace = true
+tauri-plugin-updater.workspace = true
+tracing.workspace = true
+
+autoclick-capture = { path = "crates/autoclick-capture" }
+autoclick-detect = { path = "crates/autoclick-detect" }
+autoclick-diagnostics = { path = "crates/autoclick-diagnostics" }
+autoclick-domain = { path = "crates/autoclick-domain" }
+autoclick-input = { path = "crates/autoclick-input" }
+autoclick-platform-win = { path = "crates/autoclick-platform-win" }
+autoclick-runtime = { path = "crates/autoclick-runtime" }
+autoclick-storage = { path = "crates/autoclick-storage" }
